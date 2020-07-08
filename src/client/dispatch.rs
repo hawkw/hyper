@@ -1,4 +1,5 @@
 use futures_util::future;
+use std::time::Instant;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::common::{task, Future, Pin, Poll};
@@ -80,7 +81,7 @@ impl<T, U> Sender<T, U> {
         }
         let (tx, rx) = oneshot::channel();
         self.inner
-            .send(Envelope(Some((val, Callback::Retry(tx)))))
+            .send(Envelope(Some((val, Callback::Retry(tx))), Instant::now()))
             .map(move |_| rx)
             .map_err(|mut e| (e.0).0.take().expect("envelope not dropped").0)
     }
@@ -91,7 +92,7 @@ impl<T, U> Sender<T, U> {
         }
         let (tx, rx) = oneshot::channel();
         self.inner
-            .send(Envelope(Some((val, Callback::NoRetry(tx)))))
+            .send(Envelope(Some((val, Callback::NoRetry(tx))), Instant::now()))
             .map(move |_| rx)
             .map_err(|mut e| (e.0).0.take().expect("envelope not dropped").0)
     }
@@ -116,7 +117,7 @@ impl<T, U> UnboundedSender<T, U> {
     pub fn try_send(&mut self, val: T) -> Result<RetryPromise<T, U>, T> {
         let (tx, rx) = oneshot::channel();
         self.inner
-            .send(Envelope(Some((val, Callback::Retry(tx)))))
+            .send(Envelope(Some((val, Callback::Retry(tx))), Instant::now()))
             .map(move |_| rx)
             .map_err(|mut e| (e.0).0.take().expect("envelope not dropped").0)
     }
@@ -173,16 +174,21 @@ impl<T, U> Drop for Receiver<T, U> {
     }
 }
 
-struct Envelope<T, U>(Option<(T, Callback<T, U>)>);
+struct Envelope<T, U>(Option<(T, Callback<T, U>)>, Instant);
 
 impl<T, U> Drop for Envelope<T, U> {
     fn drop(&mut self) {
-        if let Some((val, cb)) = self.0.take() {
+        let canceled = if let Some((val, cb)) = self.0.take() {
             cb.send(Err((
                 crate::Error::new_canceled().with("connection closed"),
                 Some(val),
             )));
-        }
+            true
+        } else {
+            false
+        };
+
+        tracing::trace!(duration = ?self.1.elapsed(), canceled, "dequeued");
     }
 }
 
