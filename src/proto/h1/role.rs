@@ -67,8 +67,13 @@ pub(crate) enum Server {}
 impl Http1Transaction for Server {
     type Incoming = RequestLine;
     type Outgoing = StatusCode;
-    const LOG: &'static str = "{role=server}";
+    const LOG: &'static str = "server";
 
+    #[tracing::instrument(
+        name = "Request.parse",  
+        skip(buf, ctx), 
+        fields(buf.len = buf.len(), role = ?Self::LOG)
+    )]
     fn parse(buf: &mut BytesMut, ctx: ParseContext<'_>) -> ParseResult<RequestLine> {
         if buf.is_empty() {
             return Ok(None);
@@ -88,16 +93,12 @@ impl Http1Transaction for Server {
         let mut headers_indices: [HeaderIndices; MAX_HEADERS] = unsafe { mem::uninitialized() };
         {
             let mut headers: [httparse::Header<'_>; MAX_HEADERS] = unsafe { mem::uninitialized() };
-            trace!(
-                "Request.parse([Header; {}], [u8; {}])",
-                headers.len(),
-                buf.len()
-            );
+            trace!(headers.len = headers.len());
             let mut req = httparse::Request::new(&mut headers);
             let bytes = buf.as_ref();
             match req.parse(bytes) {
                 Ok(httparse::Status::Complete(parsed_len)) => {
-                    trace!("Request.parse Complete({})", parsed_len);
+                    trace!(parsed.len = parsed_len, "complete");
                     len = parsed_len;
                     subject = RequestLine(
                         Method::from_bytes(req.method.unwrap().as_bytes())?,
