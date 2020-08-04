@@ -545,7 +545,8 @@ where
     ) -> Poll<Option<Result<(Self::PollItem, Self::PollBody), Never>>> {
         debug_assert!(!self.rx_closed);
         match self.rx.poll_next(cx) {
-            Poll::Ready(Some((req, mut cb))) => {
+            Poll::Ready(Some((req, mut cb, span))) => {
+                let _e = span.enter();
                 // check that future hasn't been canceled already
                 match cb.poll_canceled(cx) {
                     Poll::Ready(()) => {
@@ -597,8 +598,12 @@ where
                     Ok(())
                 } else if !self.rx_closed {
                     self.rx.close();
-                    if let Some((req, cb)) = self.rx.try_recv() {
-                        trace!("canceling queued request with connection error: {}", err);
+                    if let Some((req, cb, span)) = self.rx.try_recv() {
+                        trace!(
+                            parent: &span,
+                            "canceling queued request with connection error: {}",
+                            err
+                        );
                         // in this case, the message was never even started, so it's safe to tell
                         // the user that the request was completely canceled
                         cb.send(Err((crate::Error::new_canceled().with(err), Some(req))));
